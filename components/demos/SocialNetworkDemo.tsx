@@ -65,6 +65,7 @@ export default function SocialNetworkDemo({ width, height }: { width: number; he
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [bloomEnabled, setBloomEnabled] = useState(true);
   const [linkOpacity, setLinkOpacity] = useState(0.15);
+  const [loading, setLoading] = useState(true);
 
   // CSS2D renderer for labels (immune to bloom)
   const [cssRenderer] = useState(() => {
@@ -190,36 +191,48 @@ export default function SocialNetworkDemo({ width, height }: { width: number; he
     setTimeout(() => fg.zoomToFit(800, 80), 1500);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Bloom - poll until composer is ready
+  // Bloom - delay until initial simulation settles, then poll for composer
   useEffect(() => {
     if (!bloomEnabled) {
       bloomApplied.current = false;
       return;
     }
-    const interval = setInterval(() => {
-      const fg = graphRef.current;
-      if (!fg || bloomApplied.current) {
-        if (bloomApplied.current) clearInterval(interval);
-        return;
-      }
-      try {
-        const composer = fg.postProcessingComposer();
-        if (composer) {
-          const bloomPass = new UnrealBloomPass(
-            new THREE.Vector2(width, height),
-            1.2,
-            0.4,
-            0.2
-          );
-          composer.addPass(bloomPass);
-          bloomApplied.current = true;
-          clearInterval(interval);
+    let interval: ReturnType<typeof setInterval>;
+    // Wait for simulation to settle before adding bloom post-processing
+    const delayTimer = setTimeout(() => {
+      interval = setInterval(() => {
+        const fg = graphRef.current;
+        if (!fg || bloomApplied.current) {
+          if (bloomApplied.current) clearInterval(interval);
+          return;
         }
-      } catch {
-        // not ready yet
-      }
-    }, 100);
-    return () => clearInterval(interval);
+        try {
+          const composer = fg.postProcessingComposer();
+          if (composer) {
+            const bloomPass = new UnrealBloomPass(
+              new THREE.Vector2(width, height),
+              1.2,
+              0.4,
+              0.2
+            );
+            composer.addPass(bloomPass);
+            bloomApplied.current = true;
+            clearInterval(interval);
+            // Let a few frames render with bloom before revealing
+            setTimeout(() => setLoading(false), 300);
+          }
+        } catch {
+          // not ready yet
+        }
+      }, 100);
+    }, 1500);
+    // Fallback: if bloom never applies, still reveal after 4s
+    const fallback = setTimeout(() => setLoading(false), 4000);
+    return () => {
+      clearTimeout(delayTimer);
+      clearTimeout(fallback);
+      if (interval) clearInterval(interval);
+    };
   }, [bloomEnabled, width, height]);
 
   // Apply/remove selection styling on a node's material + label
@@ -405,6 +418,86 @@ export default function SocialNetworkDemo({ width, height }: { width: number; he
 
   return (
     <>
+      {/* Loading overlay — graph renders behind it */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 50,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#030308",
+          opacity: loading ? 1 : 0,
+          pointerEvents: loading ? "auto" : "none",
+          transition: "opacity 0.8s ease-out",
+        }}
+      >
+        {/* Pulsing ring */}
+        <div style={{ position: "relative", width: 64, height: 64, marginBottom: 24 }}>
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: "50%",
+              border: "2px solid rgba(99,102,241,0.3)",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: "50%",
+              border: "2px solid transparent",
+              borderTopColor: "#6366f1",
+              animation: "spin 1s linear infinite",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              inset: 8,
+              borderRadius: "50%",
+              border: "2px solid transparent",
+              borderTopColor: "#06b6d4",
+              animation: "spin 1.5s linear infinite reverse",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              inset: 18,
+              borderRadius: "50%",
+              background: "radial-gradient(circle, rgba(99,102,241,0.4) 0%, transparent 70%)",
+              animation: "pulse 2s ease-in-out infinite",
+            }}
+          />
+        </div>
+        <p style={{
+          color: "rgba(255,255,255,0.5)",
+          fontSize: 13,
+          fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
+          fontWeight: 500,
+          letterSpacing: "0.05em",
+          margin: 0,
+        }}>
+          Building network graph…
+        </p>
+        <p style={{
+          color: "rgba(255,255,255,0.2)",
+          fontSize: 11,
+          fontFamily: "-apple-system, BlinkMacSystemFont, sans-serif",
+          margin: "8px 0 0",
+        }}>
+          {data.nodes.length} nodes · {data.links.length} links
+        </p>
+        <style>{`
+          @keyframes spin { to { transform: rotate(360deg); } }
+          @keyframes pulse { 0%, 100% { opacity: 0.4; transform: scale(1); } 50% { opacity: 1; transform: scale(1.2); } }
+        `}</style>
+      </div>
+
       <ForceGraph3D
         ref={graphRef}
         graphData={data}
@@ -437,9 +530,9 @@ export default function SocialNetworkDemo({ width, height }: { width: number; he
         }}
         linkResolution={6}
         // Force engine
-        warmupTicks={80}
-        cooldownTime={5000}
-        d3AlphaDecay={0.03}
+        warmupTicks={30}
+        cooldownTime={3000}
+        d3AlphaDecay={0.05}
         d3VelocityDecay={0.4}
       />
 
